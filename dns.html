@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stark DNS Engine</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { background: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 20px; text-shadow: 0 0 5px #0f0; }
+        .box { border: 1px solid #0f0; padding: 15px; margin-top: 20px; border-radius: 5px; }
+        #status { font-weight: bold; font-size: 1.2em; color: #fff; }
+        .blink { animation: blinker 1.5s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+    <h1>STARK ENGINE V3</h1>
+    <div class="box">
+        <div>STATUS: <span id="status" class="blink">INITIALIZING...</span></div>
+        <div style="margin-top:10px; font-size: 0.8em; color: #888;">
+            PORT: 8053 | PACE: 0.5ms | BUFFER: 4KB
+        </div>
+    </div>
+    <div id="logs" style="margin-top:20px; font-size: 0.7em; color: #0f0;">
+        > Waiting for DNS traffic...
+    </div>
+
+    <script type="text/javascript" src="cordova.js"></script>
+    <script>
+        const CONFIG = {
+            LOCAL_PORT: 8053,
+            REMOTE_DNS: '8.8.8.8',
+            REMOTE_PORT: 53,
+            BREATHER_MS: 0.1 // 100 microseconds
+        };
+
+        let localSocketId, remoteSocketId;
+        let linked = false;
+        let lastClient = null;
+
+        document.addEventListener('deviceready', () => {
+            const statusEl = document.getElementById('status');
+            const logsEl = document.getElementById('logs');
+
+            // 1. Initialize Sockets
+            chrome.sockets.udp.create({}, (lInfo) => {
+                localSocketId = lInfo.socketId;
+                chrome.sockets.udp.create({}, (rInfo) => {
+                    remoteSocketId = rInfo.socketId;
+
+                    // 2. Bind to 8053
+                    chrome.sockets.udp.bind(localSocketId, '127.0.0.1', CONFIG.LOCAL_PORT, (res) => {
+                        statusEl.innerText = "ENGINE READY";
+                        statusEl.classList.remove('blink');
+                        
+                        // 3. Main Traffic Loop
+                        chrome.sockets.udp.onReceive.addListener((info) => {
+                            
+                            // FROM APP -> TO GOOGLE
+                            if (info.socketId === localSocketId) {
+                                lastClient = { addr: info.remoteAddress, port: info.remotePort };
+                                
+                                if (!linked) {
+                                    statusEl.innerText = "CONNECTION SUCCESSFUL";
+                                    statusEl.style.color = "#0ff";
+                                    logsEl.innerHTML += "<br>> SMOOTH-RESUME ACTIVE";
+                                    linked = true;
+                                }
+
+                                // PACED REDUNDANCY (Double Send)
+                                chrome.sockets.udp.send(remoteSocketId, info.data, CONFIG.REMOTE_DNS, CONFIG.REMOTE_PORT, () => {});
+                                setTimeout(() => {
+                                    chrome.sockets.udp.send(remoteSocketId, info.data, CONFIG.REMOTE_DNS, CONFIG.REMOTE_PORT, () => {});
+                                }, CONFIG.BREATHER_MS);
+                            }
+
+                            // FROM GOOGLE -> BACK TO APP
+                            if (info.socketId === remoteSocketId && lastClient) {
+                                chrome.sockets.udp.send(localSocketId, info.data, lastClient.addr, lastClient.port, () => {});
+                            }
+                        });
+                    });
+                });
+            });
+        }, false);
+    </script>
+</body>
+</html>
